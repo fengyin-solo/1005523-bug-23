@@ -3,7 +3,7 @@
     <header class="page-head">
       <div>
         <h2>稳定性考察管理</h2>
-        <p class="page-desc">维护稳定性考察记录，围绕考察编号、考察批号、考察条件、考察时间点做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护稳定性考察记录；培养基模拟灌装判为污染终止的批次会自动在此生成「待考察」待办（同一灌装编号只一条）。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记稳定性考察记录</button>
@@ -43,7 +43,10 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            {{ row[column] ?? '—' }}
+            <span v-if="column === '考察编号' && row['来源灌装编号']" class="tag-polluted">（灌装污染待办）</span>
+          </td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button

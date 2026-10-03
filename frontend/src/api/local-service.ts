@@ -43,6 +43,12 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (current === target) {
     return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
   }
+  // 状态单向推进兜底：目标在台账中的位置不能比当前状态靠前，回退一律挡回。
+  const currentOrder = meta.statuses.indexOf(current)
+  const targetOrder = meta.statuses.indexOf(target)
+  if (currentOrder >= 0 && targetOrder >= 0 && targetOrder < currentOrder) {
+    return { ok: false, message: `${meta.entity}状态只能单向推进，不能从「${current}」回到「${target}」，操作已挡回` }
+  }
   const lastStatus = meta.statuses[meta.statuses.length - 1]
   const updated: EntryRow = {
     ...rows[index],
