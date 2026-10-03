@@ -17,7 +17,16 @@ export type ModuleMeta = {
   statuses: string[]
   actions: string[]
   actionTargets: Record<string, string>
+  /** 默认只允许向相邻下一状态推进；登记在这里的动作允许直接跳到目标（业务上的越级收口）。 */
+  allowedJumps?: string[]
   metrics: string[]
+}
+
+/** 当前登录/切换的操作人：岗位 + 角色，用于本岗位复核权限判定。 */
+export type Operator = {
+  name: string
+  station: string
+  role: string
 }
 
 export type PageResult = {

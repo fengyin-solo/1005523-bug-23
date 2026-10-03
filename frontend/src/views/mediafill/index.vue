@@ -3,13 +3,22 @@
     <header class="page-head">
       <div>
         <h2>培养基模拟灌装管理</h2>
-        <p class="page-desc">维护模拟灌装记录，围绕灌装编号、灌装规格、灌装批量、培养温度做登记、筛选与状态流转。</p>
+        <p class="page-desc">判定口径统一收自台账：培养温度按现行区间，温度/天数不一致按台账统一，污染瓶数取极值挡回。</p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" type="button" @click="openCreate">登记模拟灌装记录</button>
         <button class="btn" type="button" @click="exportRows">导出培养基模拟灌装清单</button>
       </div>
     </header>
+
+    <div class="operator-bar">
+      <span class="operator-label">当前操作人（本岗位复核人才能确认判定）：</span>
+      <select :value="session.operator" @change="onSwitchOperator(($event.target as HTMLSelectElement).value)">
+        <option v-for="op in OPERATORS" :key="op.name" :value="op.name">
+          {{ op.name }} · {{ op.station }} · {{ op.role }}
+        </option>
+      </select>
+      <span class="operator-now">{{ session.operator }}（{{ session.station }} / {{ session.role }}）</span>
+    </div>
 
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
@@ -23,6 +32,13 @@
         {{ item.status }}：{{ item.count }}
       </span>
     </p>
+
+    <details class="ledger-box">
+      <summary>判定台账（规则就这一份，未按标准填写不允许保存）</summary>
+      <ul>
+        <li v-for="rule in rules" :key="rule">{{ rule }}</li>
+      </ul>
+    </details>
 
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
@@ -43,61 +59,121 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            <RouterLink v-if="column === '灌装编号'" class="link" :to="`/mediafill/${row.id}`">
+              {{ row[column] ?? '—' }}
+            </RouterLink>
+            <template v-else>{{ row[column] === '' || row[column] == null ? '—' : row[column] }}</template>
+          </td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
-              :key="action"
+              v-if="row.status === '待灌装'"
               class="link"
               type="button"
-              @click="runAction(action, row)"
+              @click="doSubmit(row)"
             >
-              {{ action }}
+              提交灌装
             </button>
+            <button
+              v-if="row.status === '灌装中' || row.status === '已判定'"
+              class="link"
+              type="button"
+              :title="canJudge ? '按台账填写三项并确认' : '只有灌装岗复核人能确认判定'"
+              @click="openJudge(row)"
+            >
+              {{ row.status === '已判定' ? '按现行区间重判' : '判定结果' }}
+            </button>
+            <button
+              v-if="row.status === '灌装中'"
+              class="link danger"
+              type="button"
+              @click="doTerminate(row)"
+            >
+              终止灌装
+            </button>
+            <span v-if="terminal(row)" class="muted-text">—</span>
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无培养基模拟灌装数据，可先登记模拟灌装记录</td>
+          <td :colspan="columns.length + 2" class="empty-state">暂无培养基模拟灌装数据</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条培养基模拟灌装记录</span>
-      <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
+      <span>共 {{ total }} 条培养基模拟灌装记录（已按编号去重，同一条不重复出现）</span>
+      <span v-if="feedback" :class="feedbackOk ? 'notice-text' : 'error-text'">{{ feedback }}</span>
     </footer>
+
+    <JudgeDialog :open="dialogOpen" :row="judgingRow" :on-judge="doJudge" @close="closeJudge" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import {
-  downloadEntries,
-  listEntries,
-  moduleMeta,
-  runAction as applyAction,
-} from '@/api/local-service'
+import { downloadEntries, listEntries, moduleMeta } from '@/api/local-service'
+import { OPERATORS, useSessionStore } from '@/stores/session'
+import { ledgerRules } from '@/data/mediafill-ledger'
 import type { EntryRow } from '@/data/types'
+import JudgeDialog from './JudgeDialog.vue'
+import { useMediafillActions } from './use-mediafill-actions'
 
 const meta = moduleMeta('mediafill')
-const columns = ["灌装编号", "灌装规格", "灌装批量", "培养温度", "培养天数", "污染瓶数", "判定结论", "灌装状态"]
-const actions = ["提交灌装", "判定结果", "终止灌装"]
-const statuses = ["待灌装", "灌装中", "已判定", "已终止"]
-const stats = [{"label": "待灌装批次", "value": 0}, {"label": "灌装中批次", "value": 0}, {"label": "污染瓶总数", "value": 0}]
+const columns = meta.fields
+const filterFields = ['灌装编号', '灌装规格']
+const rules = ledgerRules()
+
+const session = useSessionStore()
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
-const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+
 const statusSummary = computed(() =>
-  statuses.map((status: string) => ({
+  meta.statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+// 统计实时由这一份列表算出：污染瓶总数各入口取同一份，不存在两个口径
+const stats = computed(() => [
+  { label: '待灌装批次', value: rows.value.filter((row) => row.status === '待灌装').length },
+  { label: '灌装中批次', value: rows.value.filter((row) => row.status === '灌装中').length },
+  {
+    label: '污染瓶总数',
+    value: rows.value.reduce((sum, row) => {
+      const n = Number(row.污染瓶数)
+      return Number.isFinite(n) && n > 0 ? sum + n : sum
+    }, 0),
+  },
+])
+
+const {
+  feedback,
+  feedbackOk,
+  judgingRow,
+  dialogOpen,
+  canJudge,
+  openJudge,
+  closeJudge,
+  doSubmit,
+  doTerminate,
+  doJudge,
+} = useMediafillActions(reload)
+
+function terminal(row: EntryRow): boolean {
+  return row.status === '已终止'
+}
+
+function onSwitchOperator(name: string) {
+  const next = OPERATORS.find((item) => item.name === name)
+  if (next) {
+    session.switchOperator(next)
+  }
+}
 
 function resetFilters() {
   filters.value = {}
@@ -108,29 +184,10 @@ function exportRows() {
   downloadEntries(meta.key)
 }
 
-function openCreate() {
-  errorMessage.value = '模拟灌装记录登记入口尚未接入审批流'
-}
-
-function runAction(action: string, row: EntryRow) {
-  errorMessage.value = ''
-  const result = applyAction(meta.key, Number(row.id), action)
-  if (!result.ok) {
-    errorMessage.value = result.message
-    return
-  }
-  reload()
-}
-
 function reload() {
-  errorMessage.value = ''
-  try {
-    const payload = listEntries(meta.key, filters.value)
-    rows.value = payload.items
-    total.value = payload.total
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '培养基模拟灌装列表读取失败'
-  }
+  const payload = listEntries(meta.key, filters.value)
+  rows.value = payload.items
+  total.value = payload.total
 }
 
 onMounted(reload)

@@ -2,7 +2,8 @@ import { SEED_ROWS } from './seed'
 import type { EntryRow } from './types'
 
 // 本地持久化：数据放在 localStorage 里，刷新、关掉再打开都还在。
-const STORAGE_KEY = 'pharma-cleanroom:entries'
+// 结构或种子口径变化时升版本号，旧缓存自动让位于新种子。
+const STORAGE_KEY = 'pharma-cleanroom:entries:v2'
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -36,8 +37,24 @@ export function allRows(): Record<string, EntryRow[]> {
   return cache
 }
 
+/**
+ * 按 id 去重：同一条记录即使因历史脏数据出现两遍，读取时也只保留一份。
+ * 列表与详情共用这一个读取入口，保证两处取回来的是同一份数据。
+ */
+export function dedupeRows(rows: EntryRow[]): EntryRow[] {
+  const seen = new Set<number>()
+  return rows.filter((row) => {
+    const id = Number(row.id)
+    if (seen.has(id)) {
+      return false
+    }
+    seen.add(id)
+    return true
+  })
+}
+
 export function listRows(key: string): EntryRow[] {
-  return allRows()[key] ?? []
+  return dedupeRows(allRows()[key] ?? [])
 }
 
 export function saveRows(key: string, rows: EntryRow[]): void {

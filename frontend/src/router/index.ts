@@ -9,6 +9,7 @@ const Changecontrol = () => import('@/views/changecontrol/index.vue')
 const Cleanvalidate = () => import('@/views/cleanvalidate/index.vue')
 const Sterilize = () => import('@/views/sterilize/index.vue')
 const Mediafill = () => import('@/views/mediafill/index.vue')
+const MediafillDetail = () => import('@/views/mediafill/detail.vue')
 const Watermonitor = () => import('@/views/watermonitor/index.vue')
 const Gowning = () => import('@/views/gowning/index.vue')
 const Finishedqc = () => import('@/views/finishedqc/index.vue')
@@ -32,6 +33,7 @@ const router = createRouter({
     { path: '/cleanvalidate', name: 'cleanvalidate', component: Cleanvalidate },
     { path: '/sterilize', name: 'sterilize', component: Sterilize },
     { path: '/mediafill', name: 'mediafill', component: Mediafill },
+    { path: '/mediafill/:id', name: 'mediafill-detail', component: MediafillDetail },
     { path: '/watermonitor', name: 'watermonitor', component: Watermonitor },
     { path: '/gowning', name: 'gowning', component: Gowning },
     { path: '/finishedqc', name: 'finishedqc', component: Finishedqc },

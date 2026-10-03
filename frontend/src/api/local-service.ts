@@ -1,5 +1,6 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { MEDIAFILL_KEY } from '@/data/mediafill-ledger'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
@@ -28,32 +29,79 @@ export function listEntries(key: string, filters: Record<string, string> = {}): 
   return { items: matched, total: matched.length, page: 1, size: matched.length }
 }
 
-export function runAction(key: string, id: number, action: string): ActionResult {
-  const meta = moduleMeta(key)
+/** 单条详情入口：与列表走同一份 listRows，打开详情再返回两处结果都不会走样。 */
+export function getEntry(key: string, id: number): EntryRow | undefined {
+  return listRows(key).find((row) => Number(row.id) === Number(id))
+}
+
+/**
+ * 通用单向状态机：动作只能把状态往「相邻的下一状态」推进；
+ * 登记在 meta.allowedJumps 里的动作允许业务收口式越级（如污染直接终止）；
+ * 回退（含已判定被「提交灌装」拽回灌装中）、无变化、越级一律挡回。
+ */
+export function assertForwardTransition(meta: ModuleMeta, current: string, action: string): ActionResult | null {
   const target = meta.actionTargets[action]
   if (!target) {
     return { ok: false, message: `${meta.entity}没有登记「${action}」这个动作` }
   }
+  if (current === target) {
+    return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
+  }
+  const fromIndex = meta.statuses.indexOf(current)
+  const toIndex = meta.statuses.indexOf(target)
+  if (fromIndex < 0 || toIndex < 0) {
+    return { ok: false, message: `${meta.entity}当前状态「${current}」不在台账状态内` }
+  }
+  if (toIndex <= fromIndex) {
+    return { ok: false, message: `状态只能单向推进，不能从「${current}」回退到「${target}」` }
+  }
+  const isAdjacent = toIndex === fromIndex + 1
+  const jumpAllowed = (meta.allowedJumps ?? []).includes(action)
+  if (!isAdjacent && !jumpAllowed) {
+    return { ok: false, message: `不能从「${current}」越级到「${target}」，请按状态顺序推进` }
+  }
+  return null
+}
+
+export function runAction(key: string, id: number, action: string): ActionResult {
+  const meta = moduleMeta(key)
   const rows = listRows(key)
   const index = rows.findIndex((row) => Number(row.id) === id)
   if (index < 0) {
     return { ok: false, message: `没有找到编号为 ${id} 的${meta.entity}` }
   }
   const current = String(rows[index].status)
-  if (current === target) {
-    return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
+  // 单向状态机只对培养基模拟灌装强制：该模块有「已判定被拽回灌装中」的明确缺陷，
+  // 且其页面已改走 mediafill-service；其余模块动作为并行结果（如待放行→已拒绝），维持原口径。
+  if (key === MEDIAFILL_KEY) {
+    const blocked = assertForwardTransition(meta, current, action)
+    if (blocked) {
+      return blocked
+    }
+  }
+  const target = meta.actionTargets[action]
+  if (!target) {
+    return { ok: false, message: `${meta.entity}没有登记「${action}」这个动作` }
   }
   const lastStatus = meta.statuses[meta.statuses.length - 1]
   const updated: EntryRow = {
     ...rows[index],
     status: target,
     pending: target !== lastStatus,
-    abnormal: NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)),
+    abnormal: abnormalFlag(action, target, lastStatus),
   }
   const next = [...rows]
   next[index] = updated
   saveRows(key, next)
   return { ok: true, message: `${meta.entity}已${action}，当前状态「${target}」` }
+}
+
+function abnormalFlag(action: string, target: string, lastStatus: string): boolean {
+  if (NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb))) {
+    return true
+  }
+  // 终止类终态按异常统计，便于看板识别污染终止批
+  return target === '已终止' && target === lastStatus
 }
 
 export function resetModule(key: string): PageResult {
